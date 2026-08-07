@@ -1,0 +1,15 @@
+# Raw article corpus — copyrighted FT/WSJ content, not for redistribution
+PDF UFFICIALI/
+PDF_FT/
+PDF_WSJ/
+data/
+
+# R development artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Quarto render output (regenerate locally with `quarto render report.qmd`)
+*_files/
+*.html
+/.quarto/

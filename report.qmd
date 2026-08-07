@@ -1,0 +1,978 @@
+---
+title: "Analisi delle Crisi del Debito Internazionale: Un Approccio Integrato di Network Science e Text Mining"
+author: "Natale Sebastiano, Verde Antonio, Carlomagno Raffaele, De Luca Luigi"
+format: html
+editor: visual
+---
+
+## **Introduzione**
+
+Negli ultimi decenni, le crisi internazionali del debito hanno rappresentato eventi dirompenti in grado di influenzare profondamente l’economia globale, la stabilità politica e le dinamiche sociali dei paesi coinvolti. Dal caso dell’America Latina negli anni Ottanta alla crisi del debito sovrano in Europa, fino alla recente pandemia e alle tensioni geopolitiche, il concetto stesso di "crisi del debito" ha assunto connotazioni complesse e multiformi. Comprendere come questi eventi vengono narrati e interpretati dai media rappresenta un passo fondamentale per l’analisi critica dei processi economico-finanziari. In questo contesto, il presente progetto si propone di analizzare un corpus di **503** articoli in formato PDF provenienti da due delle principali testate giornalistiche economico-finanziarie internazionali: **329 dal Financial Times (FT) e 174 dal Wall Street Journal (WSJ).** L’obiettivo è investigare, tramite un approccio integrato di Text Mining e Network Science, le strutture concettuali, le co-occorrenze lessicali e i temi latenti che emergono nel modo in cui le crisi del debito sono discusse nei due giornali. La metodologia adottata prevede una duplice prospettiva:
+
+-   da un lato, gli strumenti di **Network Science** permettono di costruire e analizzare grafi di co-occorrenza tra termini, identificando nodi centrali, comunità concettuali, connessioni multilayer e strutture reticolari che modellano la narrativa mediatica intorno alle crisi del debito.
+
+-   dall'altro, le tecniche di **Text Mining** (tra cui l’analisi delle corrispondenze, la costruzione di matrici documento-termine, il Topic Modeling e l’analisi del sentiment) consentono di estrarre conoscenza dal contenuto testuale, individuando pattern ricorrenti, parole chiave, dinamiche temporali e differenze semantiche tra le fonti;
+
+Il progetto mira infine a confrontare le due fonti giornalistiche non solo a livello contenutistico, ma anche sotto il profilo strutturale, valutando differenze reticolari e tematiche nel trattamento informativo delle crisi del debito.
+
+## Network Science
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  results = 'show'
+)
+```
+
+## **Librerie**
+
+```{r}
+library(readtext)  
+library(quanteda) 
+library(quanteda.textstats)  
+library(igraph)
+library(ggplot2)
+```
+
+## **Pre-processing**
+
+Questa parte dello script si occupa della **fase di pre-processing** del testo, ovvero una pulizia approfondita necessaria per ridurre il rumore nei dati. In particolare, vengono rimossi elementi non informativi come **punteggiatura, simboli, numeri e separatori**, le parole vengono convertite in minuscolo per uniformare le forme, e vengono eliminate le **stopwords**, ovvero termini molto frequenti ma poco significativi dal punto di vista semantico. Infine, si escludono anche le parole composte da meno di tre caratteri, spesso prive di valore analitico in questo tipo di applicazione. Abbiamo costruito quindi un corpus pulito e tokenizzato, pronto per l’estrazione di relazioni lessicali e costruzione di grafi. Questa fase è fondamentale perché definisce il contenuto informativo che alimenterà l'intera analisi successiva, sia reticolare che tematica.
+
+```{r}
+pdf_corpus <- readtext::readtext("C:/Users/rcarl/OneDrive/Desktop/Esame NetText/PDF UFFICIALI")
+
+corpus_crisi <- quanteda::corpus(pdf_corpus, docid_field = "doc_id", text_field = "text")
+
+tokens_crisi <- tokens(corpus_crisi,
+                       remove_punct = TRUE,
+                       remove_symbols = TRUE,
+                       remove_numbers = TRUE,
+                       remove_separators = TRUE) %>%
+  tokens_tolower() %>%
+  tokens_remove(stopwords("it")) %>%
+  tokens_remove(stopwords("en")) %>%
+  tokens_remove(pattern = c("\\b\\w{1,2}\\b"))
+```
+
+## **Document-Feature Matrix (DFM)**
+
+Successivamente al pre-processing, si procede alla costruzione della Document-Feature Matrix (DFM), ovvero una matrice che rappresenta la frequenza delle parole all’interno di ciascun documento del corpus. Ogni riga corrisponde a un documento, ogni colonna a una parola, e ciascuna cella indica quante volte quel termine appare nel documento. A partire da questa DFM (`dfm_crisi`), si costruisce una **matrice binaria** di presenza/assenza, dove i valori vengono trasformati in 1 se la parola è presente nel documento e 0 altrimenti. Questo passaggio, noto come **binarizzazione**, permette di analizzare le **co-occorrenze tra termini**, cioè se due parole compaiono nello stesso documento, indipendentemente dalla frequenza. La binarizzazione viene effettuata in modo corretto e più efficiente attraverso la funzione `dfm_weight(..., scheme = "boolean")`, che applica lo schema booleano direttamente alla DFM. Successivamente, per evitare termini troppo rari e irrilevanti, viene effettuato un **filtro lessicale** con `dfm_trim`, mantenendo solo le parole che compaiono in almeno due documenti del corpus. Questo passaggio consente di semplificare la struttura della rete riducendo il rumore semantico. La DFM filtrata viene poi convertita in un `data.frame` per eventuali ispezioni esplorative, ma soprattutto viene trasformata in una **matrice binaria** che consente di calcolare la **matrice di co-occorrenza parola-parola**. Tale matrice viene ottenuta attraverso il prodotto scalare `t(matrice_binaria) %*% matrice_binaria`, dove ogni elemento (i,j) rappresenta il numero di documenti in cui le parole *i* e *j* compaiono insieme. Questa matrice costituisce la base per la successiva rappresentazione reticolare: ogni parola sarà un nodo e ogni co-occorrenza significativa un arco tra coppie di parole.
+
+```{r}
+
+dfm_crisi <- dfm(tokens_crisi)
+
+dfm_crisi_binaria <- dfm_crisi
+dfm_crisi_binaria[dfm_crisi_binaria > 0] <- 1
+
+dfm_crisi_binaria <- dfm_weight(dfm_crisi, scheme = "boolean")
+
+dfm_crisi_binaria_filtrata <- dfm_trim(dfm_crisi_binaria, min_docfreq = 2) 
+
+df_dtm_presenza_assenza <- convert(dfm_crisi_binaria_filtrata, to = "data.frame")
+
+matrice_binaria <- as.matrix(dfm_crisi_binaria_filtrata)
+
+matrice_cooccorrenza <- t(matrice_binaria) %*% matrice_binaria
+```
+
+## **Costruzione e visualizzazione del grafo**
+
+A partire dalla matrice di co-occorrenza parola-parola precedentemente ottenuta, è stato costruito un grafo non orientato e pesato in cui ogni nodo rappresenta un termine del corpus, mentre gli archi collegano coppie di parole che compaiono insieme almeno una volta all’interno dello stesso documento. Il peso attribuito a ciascun arco corrisponde al numero di documenti in cui quella specifica coppia di parole co-occorre. La costruzione del grafo è stata effettuata tramite la funzione `graph_from_adjacency_matrix()` del pacchetto `igraph`, specificando l'opzione `mode = "undirected"`, poiché le relazioni di co-occorrenza non presentano direzionalità, e `weighted = TRUE` per conservare l'informazione quantitativa associata alla frequenza delle co-occorrenze. Per rendere il grafo più leggibile e focalizzare l’attenzione sulle relazioni più significative, si è scelto di applicare un filtro agli archi, mantenendo solo quelli con peso pari o superiore a 150. In questo modo, sono state considerate esclusivamente le coppie di parole che compaiono congiuntamente in almeno 150 documenti. Questa soglia consente di ridurre il rumore semantico causato da co-occorrenze deboli o accidentali, semplificando la struttura del grafo e mettendo in evidenza il nucleo concettuale stabile all’interno del corpus. Una volta ridotto il grafo, l’attenzione si è concentrata sulla componente connessa principale, ovvero il sottografo più esteso in cui tutti i nodi risultano collegati tra loro da almeno un cammino. Questo passaggio è fondamentale per isolare la parte strutturalmente coerente e semanticamente centrale del network, escludendo componenti isolate o sottogruppi marginali poco rappresentativi. La componente principale così identificata risulta composta da 147 nodi e costituisce il nucleo concettuale dominante nei 503 articoli analizzati. Su tale struttura sono state calcolate le misure di centralità e condotta l’intera analisi di comunità. Per la visualizzazione della rete si è generata la matrice di adiacenza della componente maggiore, attribuendo agli archi un peso scalato (dividendo per 300) per ottenere uno spessore visivamente bilanciato. I nodi con grado più elevato appaiono quindi più grandi e colorati in tonalità calde, indicando parole chiave centrali nella struttura semantica del corpus, mentre gli archi più spessi rappresentano co-occorrenze frequenti tra termini rilevanti. La rappresentazione ottenuta consente di cogliere in modo immediato le relazioni concettuali predominanti e la struttura interna del linguaggio utilizzato nei testi. Infine, sono stati calcolati alcuni indicatori sintetici della rete, tra cui il numero totale di nodi e archi presenti nella componente principale, e il numero di termini effettivamente utilizzati nella matrice documento-termine binaria filtrata, utile per valutare l’efficacia del pre-processing e del filtraggio applicato nella fase preliminare.
+
+```{r}
+grafo_parole <- graph_from_adjacency_matrix(as.matrix(matrice_cooccorrenza),
+                                            mode = "undirected",
+                                            weighted = TRUE,
+                                            diag = FALSE)
+
+grafo_ridotto <- delete_edges(grafo_parole, E(grafo_parole)[weight < 150])
+
+
+componenti <- components(grafo_ridotto)
+componente_maggiore_id <- which.max(componenti$csize)
+nodi_componente_maggiore <- V(grafo_ridotto)[componenti$membership == componente_maggiore_id]
+grafo_componente_maggiore <- induced_subgraph(grafo_ridotto, nodi_componente_maggiore)
+table(degree(grafo_ridotto)>0)
+
+
+adj_mat_maggiore <- as_adjacency_matrix(grafo_componente_maggiore, attr = "weight", sparse = FALSE)
+
+library(network)
+
+grafo_network_maggiore <- network(adj_mat_maggiore, directed = FALSE, matrix.type = "adjacency")
+degree_nodi_maggiore <- igraph::degree(grafo_componente_maggiore)
+peso_archi_maggiore <- igraph::E(grafo_componente_maggiore)$weight / 300
+
+palette_colori_magg <- colorRampPalette(c("lightblue", "yellow", "violet", "red"))(max(degree_nodi_maggiore) + 1)
+colori_nodi_magg <- palette_colori_magg[degree_nodi_maggiore + 1]
+
+library(GGally)
+
+ggnet2(grafo_network_maggiore,
+       size = sqrt(degree_nodi_maggiore),
+       edge.size = peso_archi_maggiore,
+       edge.color = "grey",
+       color = colori_nodi_magg,
+       label = TRUE,
+       label.size = 4,
+       label.color = "black",
+       legend.size = FALSE,
+       legend.position = "none") +
+  ggtitle("Grafo parole - Componente principale")
+
+vcount(grafo_componente_maggiore)
+ecount(grafo_componente_maggiore)
+ncol(dfm_crisi_binaria_filtrata)
+```
+
+## Analisi delle misure di centralità
+
+Per analizzare il ruolo semantico delle parole all’interno della rete, sono state calcolate tre misure fondamentali di **centralità**: il **degree**, la **betweenness** e la **closeness**, applicate alla componente connessa principale del grafo.
+
+Il **degree** centrality misura il numero di connessioni dirette che ciascun nodo ha con gli altri, riflettendo quindi la popolarità o la diffusione di un termine nel network. Parole con un elevato degree tendono a co-occorre con molti altri termini e risultano quindi semanticamente centrali nel corpus.
+
+La **betweenness centrality** identifica invece quei nodi che si collocano lungo i percorsi più brevi tra coppie di altri nodi. In ambito testuale, queste parole agiscono come **ponti semantici**, collegando concetti altrimenti distanti e facilitando il transito di significato tra diverse regioni del grafo. Termini con alta betweenness assumono un ruolo strategico nella rete concettuale.
+
+La **closeness centrality**, infine, misura quanto un nodo è vicino, in media, a tutti gli altri nodi della rete. Parole con elevata closeness sono semanticamente accessibili e risultano centrali rispetto all’intero spazio lessicale, poiché possono essere raggiunte rapidamente da qualsiasi altro termine. Le tre misure sono state calcolate utilizzando le funzioni del pacchetto `igraph` e combinate in un’unica tabella, successivamente ordinata in base al degree. I termini più centrali secondo ciascuna metrica sono stati identificati e visualizzati attraverso tre grafici a barre separati, ciascuno riferito alla top 20 delle parole.
+
+Nel primo grafico vengono mostrate le venti parole con il **degree** più elevato. Si tratta dei termini che co-occorrono con il maggior numero di altri termini, e che quindi rappresentano i concetti più diffusi e trasversali nella narrativa sulle crisi del debito.
+
+Il secondo grafico presenta le parole con la **betweenness** più alta. Questi termini rivestono un ruolo chiave nella struttura del grafo, in quanto permettono la connessione tra gruppi concettuali distinti, favorendo il passaggio di significato tra cluster semantici potenzialmente separati.
+
+Infine, il terzo grafico mostra le parole con la **closeness** centrality più elevata. Tali termini risultano, in media, i più vicini a tutti gli altri nella rete, rappresentando concetti rapidamente accessibili e centrali nel contesto globale dei testi analizzati.
+
+Queste tre misure offrono una prospettiva complementare e approfondita sul ruolo che ciascuna parola assume nel grafo semantico, e aiutano a comprendere quali concetti risultano dominanti, connettivi o strutturalmente centrali nella narrativa dei 503 articoli analizzati.
+
+```{r}
+
+betweenness_nodi <- igraph::betweenness(grafo_componente_maggiore, directed = FALSE)
+
+closeness_nodi <- igraph::closeness(grafo_componente_maggiore)
+
+tabella_centralita <- data.frame(
+  parola = igraph::V(grafo_componente_maggiore)$name,
+  degree = degree_nodi_maggiore,
+  betweenness = betweenness_nodi,
+  closeness = closeness_nodi)
+
+tabella_centralita <- tabella_centralita[order(-tabella_centralita$degree), ]
+
+
+max_degree <- tabella_centralita$parola[which.max(tabella_centralita$degree)]
+max_betweenness <- tabella_centralita$parola[which.max(tabella_centralita$betweenness)]
+max_closeness <- tabella_centralita$parola[which.max(tabella_centralita$closeness)]
+
+
+top_n <- 20
+tabella_top_degree <- head(tabella_centralita, top_n)
+
+ggplot(tabella_top_degree, aes(x = reorder(parola, degree), y = degree)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +  
+  labs(title = "Top 20 parole più centrali (degree)",
+       x = "Parola",
+       y = "Degree") +
+  theme_minimal(base_size = 14)
+
+tabella_betweenness <- data.frame(
+  parola = igraph::V(grafo_componente_maggiore)$name,
+  betweenness = betweenness_nodi)
+
+tabella_betweenness <- tabella_betweenness[order(-tabella_betweenness$betweenness), ]
+
+tabella_top_betweenness <- head(tabella_betweenness, top_n)
+
+ggplot(tabella_top_betweenness, aes(x = reorder(parola, betweenness), y = betweenness)) +
+  geom_bar(stat = "identity", fill = "tomato") +
+  coord_flip() +
+  labs(title = "Top 20 parole con Betweenness più alta",
+       x = "Parola",
+       y = "Betweenness") +
+  theme_minimal(base_size = 14)
+
+
+tabella_closeness <- data.frame(
+  parola = igraph::V(grafo_componente_maggiore)$name,
+  closeness = closeness_nodi)
+
+
+tabella_closeness <- tabella_closeness[order(-tabella_closeness$closeness), ]
+
+tabella_top_closeness <- head(tabella_closeness, top_n)
+
+ggplot(tabella_top_closeness, aes(x = reorder(parola, closeness), y = closeness)) +
+  geom_bar(stat = "identity", fill = "seagreen") +
+  coord_flip() +
+  labs(title = "Top 20 parole con Closeness più alta",
+       x = "Parola",
+       y = "Closeness") +
+  theme_minimal(base_size = 14)
+```
+
+## CLIQUE
+
+Dopo aver esaminato le principali **misure di centralità** (degree, betweenness e closeness) con l’obiettivo di individuare i nodi più rilevanti nella struttura della rete, l’analisi si è focalizzata sull’identificazione delle **clique**, ovvero sottogruppi massimamente connessi in cui ciascun nodo è collegato a tutti gli altri. In ambito di Network Science, le clique rappresentano configurazioni particolarmente dense e coese, che costituiscono veri e propri **nuclei strutturali locali** della rete. Il loro studio è utile per individuare **gruppi di nodi altamente interconnessi**, potenzialmente in grado di veicolare informazioni in maniera efficiente, e che riflettono configurazioni reticolari stabili e compatte.
+
+Sono state dunque estratte le **maximal cliques**, cioè le clique che non risultano incluse in altre più grandi, e ne sono state visualizzate le prime nove come sottografi separati. L’analisi grafica mostra come la maggior parte delle clique individuate abbia una **dimensione limitata**, costituite da due a quattro nodi. Questo è coerente con la struttura generale della rete, che risulta moderatamente connessa e modulare. Nonostante le dimensioni contenute, alcune clique risultano particolarmente significative da un punto di vista strutturale.
+
+Ad esempio, la *Clique 4*, che include i nodi *“debt”*, *“crisis”* e *“bond”*, costituisce un **triangolo fortemente interconnesso**, e rappresenta una cellula strutturale coesa legata a concetti frequentemente associati all'interno della rete. La *Clique 7*, che estende questa configurazione a quattro nodi includendo *“IMF”* e *“1990s”*, può essere interpretata come una **configurazione altamente densa e potenzialmente influente** nella propagazione o concentrazione dell’informazione nella rete. Altre clique, come la *Clique 2* (*“example”*, *“crisis”*) o la *Clique 3* (*“crisis”*, *“higher”*), mostrano strutture minime, che suggeriscono **connessioni locali forti**, ma **non necessariamente centrali nella topologia globale**.
+
+Degno di nota è il fatto che il nodo *“crisis”* compare in quasi tutte le clique visualizzate, confermandone il ruolo di **hub** all’interno della rete. Dal punto di vista strutturale, questo implica che *“crisis”* è un nodo ad alta partecipazione nei sottografi più densi, e funge probabilmente da **snodo critico** tra diverse porzioni del grafo.
+
+```{r}
+library(igraph)
+cliques_list <- maximal.cliques(grafo_componente_maggiore)
+length(cliques_list)
+
+colors <- c("red", "blue", "green", "yellow", "purple", "orange", "cyan", "magenta", "brown")
+colors <- rep(colors, length.out = length(cliques_list))
+
+
+subgraphs <- lapply(cliques_list, function(cq) induced_subgraph(grafo_componente_maggiore, cq))
+
+
+layouts <- lapply(subgraphs, layout_with_fr)
+
+
+n_plots <- min(length(subgraphs), 9)  
+n_col <- 3
+n_row <- ceiling(n_plots / n_col)
+
+par(mfrow = c(n_row, n_col), mar = rep(1,4))
+
+for (i in seq_len(n_plots)) {
+  sg <- subgraphs[[i]]
+  vertex_colors <- rep(colors[i], vcount(sg))
+  plot(sg,
+       layout = layouts[[i]],
+       vertex.color = vertex_colors,
+       vertex.label = V(sg)$name,
+       vertex.label.cex = 0.7,
+       vertex.size = 15,
+       main = paste("Clique", i))
+}
+
+clique_sizes <- sapply(cliques_list, length)
+
+
+summary(clique_sizes)
+
+
+which.max(clique_sizes)
+
+
+V(grafo_componente_maggiore)[cliques_list[[which.max(clique_sizes)]]]$name
+
+```
+
+## Community Detection
+
+Dopo aver analizzato le misure di centralità, l’attenzione si è spostata sull’individuazione della **struttura a community** all’interno del grafo semantico. L’obiettivo di questa fase è quello di rilevare eventuali **sottogruppi di parole** che tendono a co-occorre tra loro più frequentemente rispetto al resto del network, segnalando così la presenza di cluster concettuali coerenti all’interno del corpus.
+
+La prima tecnica utilizzata è stata l’algoritmo **Louvain**, particolarmente adatto per reti di grandi dimensioni, in quanto ottimizza la **modularità**, una misura che quantifica la densità di collegamenti all’interno delle comunità rispetto ai collegamenti tra comunità diverse. L’algoritmo ha restituito tre community, ma con un valore di modularità relativamente basso, suggerendo che la struttura del grafo non presenta separazioni fortemente marcate: le parole tendono a co-occorre in modo diffuso piuttosto che organizzarsi in gruppi semanticamente isolati.
+
+Una volta identificata l'appartenenza di ciascun nodo a una community, è stato utilizzato un layout di tipo **Fruchterman-Reingold** per la visualizzazione, che distribuisce i nodi in modo spazialmente equilibrato, evidenziando le formazioni reticolari. I nodi sono stati colorati in base alla community di appartenenza, restituendo una rappresentazione visiva efficace della struttura a blocchi della rete. L’informazione sulla community Louvain è stata inoltre integrata nella tabella delle misure di centralità per un’analisi combinata.
+
+Parallelamente, si è applicato anche l’algoritmo **Walktrap**, basato su **random walk** all’interno della rete. Questo metodo presuppone che le camminate casuali tendano a rimanere più a lungo all’interno di comunità ben definite, rendendolo particolarmente efficace nell’individuare gruppi coesi. L’algoritmo ha individuato cinque community. Anche in questo caso, la modularità ottenuta è risultata modesta, confermando la natura piuttosto coesa e interconnessa della rete semantica.
+
+Le community individuate da Walktrap sono state visualizzate utilizzando lo stesso layout Fruchterman-Reingold, per mantenere la coerenza visiva e facilitare il confronto. La colorazione differenziata ha permesso di evidenziare come le parole tendano a raggrupparsi in sottoinsiemi concettuali, seppur senza separazioni nette.
+
+Infine, sono stati testati anche gli algoritmi **Label Propagation** e **Infomap**, ma in entrambi i casi il risultato è stato l’individuazione di un’unica comunità con una modularità pari a zero. Questo indica l’assenza di una struttura fortemente modulare e rafforza la scelta di concentrarsi sulle analisi più articolate offerte da Louvain e Walktrap, che, pur restituendo una segmentazione meno netta, risultano comunque più informative nel contesto dei 503 articoli analizzati.
+
+```{r}
+
+community_louvain <- igraph::cluster_louvain(grafo_componente_maggiore)
+
+membership_louvain <- membership(community_louvain)
+
+modularita_louvain <- igraph::modularity(community_louvain)
+
+print(modularita_louvain)
+
+
+length(unique(membership_louvain))
+
+layout_fr <- igraph::layout_with_fr(grafo_componente_maggiore)
+
+coord_df <- as.data.frame(layout_fr)
+colnames(coord_df) <- c("x", "y")
+
+palette_colori_community <- rainbow(length(unique(membership_louvain)))
+colori_nodi_community <- palette_colori_community[membership_louvain]
+
+ggnet2(grafo_network_maggiore,
+       size = sqrt(degree_nodi_maggiore),
+       edge.size = peso_archi_maggiore,
+       edge.color = "grey",
+       color = colori_nodi_community,
+       label = TRUE,
+       label.size = 4,
+       label.color = "black",
+       legend.size = FALSE,
+       legend.position = "none",
+       layout.par = coord_df) +
+  ggtitle("Grafo parole - Componente principale - Community (Louvain) con Layout FR")
+
+
+
+tabella_centralita$community <- membership_louvain
+
+
+parole_community <- data.frame(
+  parola = igraph::V(grafo_componente_maggiore)$name,
+  community = membership_louvain)
+
+parole_community_sorted <- parole_community[order(parole_community$community), ]
+
+unique(parole_community_sorted$community)
+
+print(parole_community_sorted)
+
+
+community_walktrap <- igraph::cluster_walktrap(grafo_componente_maggiore)
+
+membership_walktrap <- membership(community_walktrap)
+
+modularita_walktrap <- igraph::modularity(community_walktrap)
+
+print(modularita_walktrap)
+
+tabella_centralita$community_walktrap <- membership_walktrap
+
+num_community_walktrap <- length(unique(membership_walktrap))
+
+layout_fr <- igraph::layout_with_fr(grafo_componente_maggiore)
+
+coord_df <- as.data.frame(layout_fr)
+colnames(coord_df) <- c("x", "y")
+
+palette_colori_community <- rainbow(length(unique(membership_walktrap)))
+colori_nodi_community <- palette_colori_community[membership_walktrap]
+
+ggnet2(grafo_network_maggiore,
+       size = sqrt(degree_nodi_maggiore),
+       edge.size = peso_archi_maggiore,
+       edge.color = "grey",
+       color = colori_nodi_community,
+       label = TRUE,
+       label.size = 4,
+       label.color = "black",
+       legend.size = FALSE,
+       legend.position = "none",
+       layout.par = coord_df) +
+  ggtitle("Grafo parole - Componente principale - Community (Walktrap) con Layout FR")
+
+
+parole_community_walktrap <- data.frame(
+  parola = igraph::V(grafo_componente_maggiore)$name,
+  community = membership_walktrap
+)
+
+parole_community_sorted_walktrap <- parole_community_walktrap[order(parole_community_walktrap$community), ]
+
+unique(parole_community_sorted_walktrap$community)
+
+print(parole_community_sorted_walktrap)
+```
+
+## Confronto della robustezza delle partizioni: analisi con `robin`
+
+Per completare l’analisi della struttura a community della rete semantica, è stato effettuato un confronto tra i principali algoritmi di rilevazione delle comunità in termini di robustezza delle partizioni, utilizzando il pacchetto `robin`. Questo strumento consente di valutare quanto le partizioni individuate da ciascun algoritmo resistano a perturbazioni casuali applicate alla rete, misurando la stabilità delle community emerse.
+
+Il grafo della componente principale è stato convertito in un formato compatibile con il pacchetto `robin` tramite la funzione `prepGraph()`. Successivamente, sono stati confrontati i risultati di **Walktrap** – identificato come algoritmo di riferimento per la sua maggiore stabilità – con quelli di altri metodi noti: **Louvain**, **Infomap**, **Label Propagation** e **Fast Greedy**. L’indice di robustezza è stato calcolato su più livelli di perturbazione della rete e i risultati sono stati visualizzati tramite `plot()` e `plotMultiCompare()`.
+
+Il primo grafico mostra il confronto tra **Walktrap e Louvain**. Entrambi gli algoritmi mantengono un certo grado di stabilità anche con livelli crescenti di perturbazione, ma **Walktrap mostra valori di dissimilarità sistematicamente più bassi**, indicando una maggiore robustezza delle partizioni. Questo risultato evidenzia che le comunità individuate da Walktrap sono meno sensibili alle modifiche nella struttura della rete, rendendolo l’approccio più stabile e affidabile tra i due.
+
+Nel secondo grafico, che confronta Walktrap con gli algoritmi Infomap, Label Propagation e Fast Greedy, emergono differenze significative nella stabilità delle partizioni.
+
+**Walktrap** si conferma come l’algoritmo **più stabile**, mostrando valori di dissimilarità costantemente inferiori lungo tutto l'intervallo di perturbazione.
+
+**Fast Greedy** presenta una stabilità intermedia, con una curva crescente ma più alta rispetto a Walktrap, e simile a quella di Louvain.
+
+Al contrario, **Infomap** e **Label Propagation** mostrano una **totale instabilità**: la curva rimane piatta e prossima allo zero, indicando che le partizioni generate si degradano anche con minime modifiche della rete. Questo è coerente con l’osservazione che entrambi gli algoritmi restituiscono una sola community con **modularità ≈ 0**, suggerendo l’assenza di una struttura di comunità ben definita.
+
+In conclusione, l’analisi condotta con `robin` evidenzia che **Walktrap** rappresenta l’approccio **più affidabile e robusto** per l’analisi delle community nella rete semantica esaminata. La stabilità delle partizioni è fondamentale per garantire che le strutture identificate riflettano effettivamente pattern presenti nei dati e non risultati casuali o artefatti dell’algoritmo.
+
+```{r}
+library(robin)
+
+graph <- prepGraph(grafo_componente_maggiore, file.format = "igraph")
+
+set.seed(100)
+compLW <- robinCompare(graph = graph,
+                       method1 = "louvain",
+                       method2 = "walktrap") 
+
+plot(compLW)
+
+set.seed(100)
+compI  <- robinCompare(graph = graph, method1 = "walktrap", method2 = "infomap")
+
+set.seed(100)
+compLa <- robinCompare(graph = graph, method1 = "walktrap", method2 = "labelProp")
+
+set.seed(100)
+compF  <- robinCompare(graph = graph, method1 = "walktrap", method2 = "fastGreedy")
+
+
+plotMultiCompare(compI, compLa, compLW, compF)
+```
+
+## Grafico 3D
+
+È stato inoltre realizzato un **grafico interattivo in 3D** della rete semantica utilizzando il pacchetto `networkD3`, con la colorazione dei nodi basata sulle community individuate tramite l’algoritmo di Walktrap. Questo algoritmo, risultato il più robusto secondo l’analisi `robin`, ha identificato **cinque comunità principali** nel grafo della componente maggiore. La visualizzazione interattiva consente di esplorare dinamicamente la struttura reticolare e osservare la distribuzione dei concetti tra i diversi cluster semantici emersi dall’analisi.
+
+```{r}
+library(networkD3)
+
+igraph::V(grafo_componente_maggiore)$community <- membership_walktrap  
+
+graph_d3 <- igraph_to_networkD3(grafo_componente_maggiore, group = V(grafo_componente_maggiore)$community)
+
+forceNetwork(Links = graph_d3$links,
+             Nodes = graph_d3$nodes,
+             Source = 'source',
+             Target = 'target',
+             NodeID = 'name',
+             Group = 'group',
+             opacity = 1,
+             linkDistance = JS("function(d) { return 30; }"),
+             charge = JS("function(d) { return -100; }"),
+             fontSize = 16,
+             fontFamily = "Arial")
+
+```
+
+Per approfondire la struttura interna della rete semantica, è stata calcolata la dimensione di ciascuna community, ovvero il numero di parole associate a ogni gruppo, sulla base del partizionamento ottenuto mediante l’algoritmo Walktrap. Quest’ultimo è stato scelto in quanto risultato il più stabile secondo l’analisi di robustezza condotta con il pacchetto `robin`, dimostrandosi meno sensibile alle perturbazioni strutturali della rete rispetto ad altri metodi.
+
+Il grafico mostra con chiarezza una distribuzione fortemente sbilanciata: la seconda community raccoglie oltre cento termini e costituisce, di fatto, il nucleo semantico centrale dell’intera rete. La prima community, pur con un numero di parole significativamente inferiore – circa quaranta – presenta comunque una struttura coesa e tematicamente compatta. Al contrario, le community 3, 4 e 5 risultano estremamente ridotte, composte ciascuna da una sola parola. Questa evidente disomogeneità nelle dimensioni suggerisce l’esistenza di una struttura modulare non uniforme, in cui pochi cluster concentrano la maggior parte dei concetti chiave emersi dal corpus, mentre altri riflettono sotto-temi specifici, termini marginali o elementi lessicali isolati.
+
+Un’analisi più approfondita dei contenuti delle community principali conferma questa interpretazione. La seconda community, che rappresenta il cuore della rete, è composta da termini legati al lessico della governance economica, ai mercati internazionali e agli attori istituzionali. Al suo interno compaiono parole come “government”, “investment”, “credit”, “foreign”, “sector”, “exchange”, insieme a espressioni tipiche del discorso giornalistico e temporale come “years”, “ago”, “said”, “next” e “may”. Si tratta, dunque, di un cluster ampio e articolato, che riflette una narrazione fortemente centrata sulle dinamiche macroeconomiche e sulle decisioni politiche legate alla gestione delle crisi del debito.
+
+La prima community, invece, evidenzia una dimensione storica e finanziaria più marcata. In essa compaiono riferimenti espliciti agli anni Ottanta e Novanta e al contesto latinoamericano, con particolare attenzione al caso argentino. Parole come “1980s”, “argentina”, “debt”, “loans”, “bond”, “bonds”, “IMF” e “crisis” delineano un frame semantico che ruota attorno ai processi di indebitamento, alla pressione delle istituzioni finanziarie internazionali e alle politiche pubbliche attuate in risposta agli shock economici. Questa community, pur meno estesa della precedente, risulta estremamente densa dal punto di vista tematico, e rappresenta una delle componenti più significative della rete.
+
+Le tre community residue – la terza, la quarta e la quinta – appaiono invece come cluster marginali e isolati. Ognuna di esse contiene un solo termine (“policies”, “example” e “higher”), che pur essendo semanticamente rilevante nei rispettivi contesti, non presenta legami di co-occorrenza sufficientemente forti da aggregarsi stabilmente ai cluster principali. Si tratta, con tutta probabilità, di parole che svolgono una funzione discorsiva o valutativa nei testi, ma che non ricorrono in associazione diretta con un insieme strutturato di altri concetti. Queste micro-community possono quindi essere considerate come nodi semantici periferici, frutto della granularità dell’algoritmo di rilevazione, e indicano la presenza di porzioni testuali più isolate nel corpus analizzato.
+
+Nel complesso, l’algoritmo Walktrap ha permesso di individuare una segmentazione coerente della rete semantica, in cui emergono chiaramente un nucleo centrale fortemente coeso, un secondo cluster tematicamente solido e interpretabile, e alcune frange lessicali più deboli ma comunque informative. Questa struttura conferma l’esistenza di un’organizzazione modulare dei concetti, riflesso diretto della costruzione narrativa delle crisi del debito nei testi analizzati.
+
+```{r}
+library(dplyr)
+
+
+ library(dplyr)
+
+community_sizes_walktrap <- parole_community_walktrap %>%
+  group_by(community) %>%
+  summarise(size = n()) %>%
+  arrange(desc(size))
+
+library(ggplot2)
+
+ggplot(community_sizes_walktrap, aes(x = reorder(factor(community), size), y = size, fill = factor(community))) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Comunità per Dimensione (Walktrap)",
+       x = "Community",
+       y = "Numero di Parole") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+
+
+```
+
+## Analisi multilayer: confronto semantico tra Financial Times e Wall Street Journal
+
+Per esplorare le differenze e sovrapposizioni nel vocabolario utilizzato da **Financial Times (FT) e Wall Street Journal (WSJ)** nella trattazione delle crisi internazionali del debito, è stato costruito un **grafo multilayer**, una struttura che consente di rappresentare simultaneamente due livelli distinti di informazione (uno per ciascun giornale), mantenendo al contempo le connessioni concettuali tra termini comuni.
+
+### Costruzione dei layer
+
+In una prima fase, sono stati importati i **503 documenti PDF** suddivisi in due gruppi: 329 articoli dal Financial Times e 174 dal Wall Street Journal. Dopo aver sottoposto entrambi i corpus a un pre-processing testuale standard (rimozione di punteggiatura, simboli, numeri, parole brevi e stopwords), si è passati all'identificazione delle **20 parole** più frequenti per ciascun giornale. Questa scelta consente di ridurre la complessità del grafo e di focalizzare l’attenzione sui termini più rappresentativi di ciascuna fonte.
+
+Per ciascun layer, è stato costruito un **grafo di co-occorrenza** basato sulla frequenza con cui le parole della top 20 compaiono insieme all’interno degli stessi documenti. I grafi risultanti sono **non orientati e pesati**, con nodi etichettati in modo da distinguere la provenienza , e ciascun layer è stato contrassegnato da un attributo specifico (`layer = "FT"` o `"WS"`).
+
+### Integrazione multilayer e archi interlayer
+
+Successivamente, i due grafi sono stati uniti in una struttura multilayer completa utilizzando la funzione `igraph::union()`. A questo punto, sono stati identificati i termini comuni alle due top 20 e sono stati inseriti **archi interlayer** tra le due occorrenze della stessa parola. Questi archi permettono di evidenziare le connessioni semantiche condivise tra le due fonti e forniscono un elemento di confronto diretto.
+
+### Community detection e visualizzazione
+
+Sulla rete multilayer completa è stata applicata una **community detection con algoritmo Louvain**, per identificare eventuali gruppi concettuali condivisi o separati tra i due giornali. I nodi sono stati colorati in base alla community di appartenenza, mentre gli archi interlayer sono stati evidenziati in viola, distinguendoli visivamente dalle connessioni interne ai singoli layer.
+
+Il grafo è stato infine visualizzato con un layout Fruchterman-Reingold, che permette di evidenziare la prossimità semantica tra i nodi. Il risultato mostra due cluster ben separati: in alto il layer relativo al Financial Times, in basso quello del Wall Street Journal. Gli archi interlayer collegano le parole comuni, segnalando aree di sovrapposizione tematica, mentre l’assenza di collegamenti per altri termini suggerisce differenze lessicali o di impostazione editoriale tra le due fonti.
+
+La rete multilayer così costruita consente di osservare **due strategie discorsive parzialmente distinte**, pur con alcune convergenze su concetti centrali come *“crisis”*, *“debt”*, *“markets”* o *“bank”*. Il Financial Times sembra enfatizzare un vocabolario più legato alla dimensione **macroeconomica e internazionale** (*“capital”, “emerging”, “economist”*, ecc.), mentre il WSJ mostra termini maggiormente focalizzati su **aspetti specifici** (*“government”, “billion”, “says”*, ecc.).
+
+La presenza di comunità miste (parole dei due giornali aggregate nello stesso cluster) indicherebbe una parziale coerenza semantica trasversale alle fonti, mentre la netta separazione visiva conferma anche una diversità strutturale nelle reti di co-occorrenza. L'uso del multilayer si rivela quindi particolarmente efficace per evidenziare le somiglianze e differenze semantiche tra fonti giornalistiche, fornendo una rappresentazione chiara, sintetica e strutturalmente informativa.
+
+```{r}
+library(readtext)
+library(quanteda)
+library(quanteda.textstats)
+library(igraph)
+library(multinet)
+
+pdf_ft <- readtext("C:/Users/rcarl/OneDrive/Desktop/Esame NetText/PDF_FT")
+pdf_ws <- readtext("C:/Users/rcarl/OneDrive/Desktop/Esame NetText/PDF_WSJ")
+
+corpus_ft <- corpus(pdf_ft, docid_field = "doc_id", text_field = "text")
+corpus_ws <- corpus(pdf_ws, docid_field = "doc_id", text_field = "text")
+
+processa_corpus <- function(corp) {
+  tokens(corp,
+         remove_punct = TRUE,
+         remove_symbols = TRUE,
+         remove_numbers = TRUE,
+         remove_separators = TRUE) %>%
+    tokens_tolower() %>%
+    tokens_remove(stopwords("en")) %>%
+    tokens_remove(pattern = "\\b\\w{1,2}\\b")
+}
+
+tokens_ft <- processa_corpus(corpus_ft)
+tokens_ws <- processa_corpus(corpus_ws)
+
+top_ft <- names(topfeatures(dfm(tokens_ft), 20))
+top_ws <- names(topfeatures(dfm(tokens_ws), 20))
+
+
+crea_cooc_top <- function(tokens, top_words) {
+  dfm_tok <- dfm(tokens)
+  dfm_top <- dfm_keep(dfm_tok, pattern = top_words)
+  fcm(dfm_top, context = "document", tri = FALSE)
+}
+
+cooc_ft <- crea_cooc_top(tokens_ft, top_ft)
+cooc_ws <- crea_cooc_top(tokens_ws, top_ws)
+
+graph_ft <- graph_from_adjacency_matrix(as.matrix(cooc_ft), mode = "undirected", weighted = TRUE, diag = FALSE)
+graph_ws <- graph_from_adjacency_matrix(as.matrix(cooc_ws), mode = "undirected", weighted = TRUE, diag = FALSE)
+
+V(graph_ft)$name <- paste0(V(graph_ft)$name, "_FT")
+V(graph_ws)$name <- paste0(V(graph_ws)$name, "_WS")
+V(graph_ft)$layer <- "FT"
+V(graph_ws)$layer <- "WS"
+
+g_all <- igraph::union(graph_ft, graph_ws, byname = TRUE)
+
+nodi_ft <- V(graph_ft)$name
+nodi_ws <- V(graph_ws)$name
+parole_ft <- gsub("_FT$", "", nodi_ft)
+parole_ws <- gsub("_WS$", "", nodi_ws)
+comuni <- intersect(parole_ft, parole_ws)
+
+inter_edges <- data.frame(
+  from = paste0(comuni, "_FT"),
+  to   = paste0(comuni, "_WS")
+)
+
+g_all <- add_edges(g_all, t(as.matrix(inter_edges)), attr = list(weight = 1, interlayer = TRUE))
+
+E(g_all)$weight[is.na(E(g_all)$weight)] <- 1
+
+com <- cluster_louvain(g_all)
+V(g_all)$community <- membership(com)
+colors <- rainbow(length(unique(V(g_all)$community)))
+vertex_col <- colors[V(g_all)$community]
+
+library(RColorBrewer)
+
+layout_fr <- layout_with_fr(g_all)
+
+colors <- brewer.pal(length(unique(V(g_all)$community)), "Dark2")
+vertex_col <- colors[V(g_all)$community]
+
+edge_col <- ifelse(is.na(E(g_all)$interlayer), "gray80",
+                   ifelse(E(g_all)$interlayer, adjustcolor("violet", alpha.f = 0.7), "gray80"))
+
+vertex_size <- 9            
+label_size  <- 0.7         
+label_font  <- 2            
+
+plot(
+  g_all,
+  layout = layout_fr,
+  vertex.color = vertex_col,
+  vertex.size = vertex_size,
+  vertex.label = V(g_all)$name,
+  vertex.label.cex = label_size,
+  vertex.label.color = "black",
+  vertex.label.font = label_font,
+  edge.color = edge_col,
+  edge.width = ifelse(!is.na(E(g_all)$interlayer) & E(g_all)$interlayer, 2.2, 0.4),
+  main = "Multilayer – Top 20 FT vs WS")
+```
+
+## Text Mining
+
+## Preparazione del corpus e pre-processing
+
+In questa sezione, si avvia l’analisi testuale dei 503 documenti PDF attraverso le tecniche del **Text Mining**, con l’obiettivo di estrarre informazioni latenti, pattern linguistici e rappresentazioni sintetiche del contenuto testuale. Il primo passo fondamentale è l’importazione e la pulizia dei testi. I testi sono stati trasformati in un oggetto `Corpus` pronto per essere sottoposto a pre-processing.
+
+La fase di pulizia del testo è fondamentale per garantire l’efficacia delle successive analisi statistiche, poiché consente di ridurre il rumore informativo e standardizzare i contenuti. A tal fine, ogni documento è stato convertito in minuscolo per evitare duplicazioni dovute alla differenza tra maiuscole e minuscole; sono state poi rimosse le interruzioni di riga, gli spazi bianchi superflui, la punteggiatura, i numeri e le parole molto comuni della lingua inglese (stopwords) che non portano significato specifico nel contesto tematico.
+
+Questa scelta metodologica si fonda sull’esigenza di ottenere una rappresentazione del testo che sia coerente e semanticamente informativa. Abbiamo optato per l’utilizzo del pacchetto `tm` poiché esso si integra in modo efficace con le tecniche di analisi successive previste nel nostro progetto, in particolare la **costruzione della Document-Term Matrix (DTM)** e l’applicazione del **Topic Modeling** tramite `topicmodels`, nonché dell’**Analisi delle Corrispondenze** con `FactoMineR`.
+
+```{r}
+library(readtext)
+library(tm)
+library(tidyverse)
+library(ggplot2)
+library(wordcloud)
+library(topicmodels)
+library(tidytext)
+library(FactoMineR)
+library(factoextra)
+library(RColorBrewer)
+library(stringr)
+
+main_path <- "C:/Users/rcarl/OneDrive/Desktop/Esame NetText/PDF UFFICIALI"
+texts <- readtext(file.path(main_path, "*.pdf"))
+
+corpus <- Corpus(VectorSource(texts$text))
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, content_transformer(function(x) gsub("\n", " ", x)))
+corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))  # <-- inglese
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+```
+
+## Analisi dei Topic con LDA
+
+L’obiettivo di questa sezione è individuare e interpretare i **temi latenti** presenti nei 503 documenti ufficiali analizzati, tramite l’applicazione di tecniche di **Topic Modeling**, in particolare del modello probabilistico **Latent Dirichlet Allocation (LDA)**. Questo approccio consente di sintetizzare contenuti testuali complessi, restituendo una rappresentazione strutturata della semantica implicita nel corpus.
+
+## Costruzione della Document-Term Matrix
+
+I documenti sono stati trasformati in una **Document-Term Matrix (DTM)**. In questa matrice, ogni riga rappresenta un documento e ogni colonna una parola, con valori che indicano la frequenza di ciascun termine. È stato inoltre applicato un filtro per considerare solo parole di almeno quattro lettere, al fine di focalizzarsi su termini informativi e ridurre la dimensionalità del vocabolario.
+
+## Wordcloud
+
+La **wordcloud** realizzata a partire dalla Document-Term Matrix (DTM) offre una rappresentazione visiva immediata delle parole più frequenti contenute nel corpus analizzato, composto da oltre 500 documenti ufficiali. In questa visualizzazione, la dimensione di ciascun termine è proporzionale alla sua frequenza assoluta all’interno del corpus: più una parola è grande, più volte ricorre nei testi. I colori sono invece scelti per distinguere visivamente i termini tra loro.
+
+Tra i termini più rilevanti emergono parole come **“debt”**, **“latin”**, **“markets”**, **“banks”**, **“financial”**, **“crisis”**, **“countries”** e **“international”**. Questi risultati sono perfettamente coerenti con la natura del corpus, centrato su documenti che trattano tematiche economiche e finanziarie internazionali, in particolare relative alle crisi del debito e alle dinamiche di sviluppo dei mercati emergenti. Il termine “**debt**” appare come uno dei più centrali, confermando l’attenzione dominante sui problemi di indebitamento; “**latin**” e “**countries**” suggeriscono un forte riferimento geografico, probabilmente legato alla situazione in America Latina. Parole come “**banks**”, “**financial**” e “**crisis**” indicano un focus ricorrente sulle istituzioni economiche e sulle instabilità sistemiche.
+
+Nel nostro caso, abbiamo scelto di visualizzare le **100** parole più frequenti con un filtro su `min.freq = 2` per evitare parole isolate. Abbiamo anche impostato la funzione `scale = c(3, 0.7)` per controllare le dimensioni massime e minime del font (la dimensione del font rappresenta la frequenza di ciascuna parola), ottenendo un layout più bilanciato e leggibile.
+
+## Scelta del numero ottimale di topic (k)
+
+La scelta del numero di topic *k* è una delle decisioni più delicate nel Topic Modeling. Abbiamo quindi adottato una procedura **data-driven**, stimando modelli LDA per diversi valori di *k* (da 2 a 10) e confrontandone la **log-verosimiglianza**. Il grafico risultante mostra una crescita progressiva, ma con una flessione più evidente della pendenza a partire da *k = 4*. Per questo motivo, abbiamo selezionato **k = 4** come configurazione ottimale, in quanto graficamente risulta evidente il "gomito".
+
+## Stima del modello LDA
+
+Per stimare il modello LDA abbiamo utilizzato il **Gibbs Sampling**, un algoritmo di inferenza bayesiana appartenente alla famiglia dei metodi **MCMC (Markov Chain Monte Carlo)**. Questi algoritmi servono a generare campioni da una distribuzione di probabilità complessa quando non è possibile calcolarla direttamente in modo analitico, come accade nei modelli probabilistici latenti.
+
+Nel caso specifico dell’LDA, il calcolo esatto delle distribuzioni posteriori (cioè la distribuzione dei topic nei documenti e delle parole nei topic) è troppo complicato. Il Gibbs Sampling permette di assegnare iterativamente un topic a ciascuna parola, aggiornando queste assegnazioni in base alla probabilità condizionata che quella parola appartenga a un certo topic, dato il documento in cui si trova e le assegnazioni precedenti. Con il passare delle iterazioni, questo processo converge verso una buona approssimazione delle vere distribuzioni latenti.
+
+Abbiamo scelto il Gibbs Sampling rispetto ad altri metodi perché è più adatto per corpus di medie dimensioni, come quello da noi analizzato, e consente di ottenere risultati più chiari e facilmente interpretabili, con topic ben separati e semanticamente coerenti.
+
+I parametri `alpha = 0.1` e `delta = 0.01` sono stati scelti per ottenere **topic ben separati** tra loro e distribuiti in modo netto nei documenti, facilitandone così l’interpretazione.
+
+## Visualizzazione dei topic
+
+Dopo aver stimato il modello LDA, abbiamo estratto le parole più rappresentative di ciascun topic, analizzando la *matrice beta*, che indica la probabilità di ogni termine dato un topic. Le parole con i valori di *beta* più elevati sono state visualizzate tramite grafici a barre, facilitando così l’interpretazione semantica dei temi latenti emersi dal corpus. L’analisi ha restituito **quattro topic** distinti e coerenti, ognuno dei quali è stato interpretato e denominato manualmente sulla base dei termini predominanti.
+
+Il primo topic, che abbiamo denominato **Mercati Emergenti**, è caratterizzato da parole come *markets*, *growth*, *emerging*, *capital* e *latin*, che richiamano la narrativa sullo sviluppo economico, la crescita e le vulnerabilità finanziarie dei paesi in via di sviluppo.
+
+Il secondo, identificato come **Politica Economica**, include termini quali *government*, *president*, *trade*, *political* e *mexico*, suggerendo un focus sul ruolo delle istituzioni, delle leadership politiche e sulle dinamiche regionali, in particolare in America Latina.
+
+Il terzo topic, intitolato **Prestiti e Aziende**, è dominato da parole come *banks*, *billion*, *companies*, *loans* e *business*, e riflette i temi legati alla finanza d’impresa, agli investimenti, alla gestione del credito e alle grandi operazioni economiche nel settore privato.
+
+Infine, il quarto topic, che abbiamo etichettato come **Crisi Finanziaria**, raccoglie parole chiave come *crisis*, *financial*, *governments*, *bank* e *international*, che rimandano alle crisi sistemiche globali e al ruolo della governance economica internazionale e delle istituzioni finanziarie.
+
+```{r}
+
+dtm <- DocumentTermMatrix(corpus, control = list(wordLengths = c(4, Inf)))
+dtm <- dtm[rowSums(as.matrix(dtm)) > 0, ]
+
+dtm_mat <- as.matrix(dtm)
+
+word_freq <- sort(colSums(dtm_mat), decreasing = TRUE)
+
+word_df <- data.frame(word = names(word_freq), freq = word_freq)
+
+wordcloud(words = word_df$word,
+          freq = word_df$freq,
+          min.freq = 2,
+          max.words = 100, 
+          random.order = FALSE,
+          scale = c(3, 0.7),
+          colors = brewer.pal(8, "Dark2"))
+
+
+k_seq <- 2:10
+loglikelihoods <- c()
+
+for (k in k_seq) {
+  cat("Calcolo modello LDA con k =", k, "\n")
+  lda_model_k <- LDA(dtm, k = k, control = list(seed = 1234))
+  loglikelihoods <- c(loglikelihoods, logLik(lda_model_k))
+}
+
+plot(k_seq, loglikelihoods, type = "b", pch = 19,
+     xlab = "Numero di Topic (k)", ylab = "Log-Likelihood",
+     main = "Valutazione LDA per diversi k")
+
+best_k <- 4 
+
+lda_model <- LDA(dtm, k = best_k, method = "Gibbs",
+                 control = list(seed = 1234, alpha = 0.1, delta = 0.01, burnin = 1000, iter = 1000, thin = 100))
+
+lda_topics <- tidy(lda_model, matrix = "beta")
+
+top_terms <- lda_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup()
+
+ggplot(top_terms, aes(reorder(term, beta), beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Top Terms per Topic", x = "Termine", y = "Peso")
+
+lda_topics <- tidy(lda_model, matrix = "beta")
+
+top_words <- lda_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 20) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+topic_names <- c("Mercati Emergenti", "Politica Economica", "Prestiti e Aziende", "Crisi Finanziaria")
+
+custom_theme <- theme(
+  plot.title = element_text(size = 14, face = "bold"),
+  axis.title = element_text(size = 12),
+  axis.text = element_text(size = 10),
+  strip.text = element_text(size = 12, face = "bold"),
+  legend.title = element_text(size = 12),
+  legend.text = element_text(size = 10)
+)
+
+top_words <- top_words %>%
+  mutate(topic_name = factor(topic, labels = topic_names))
+
+ggplot(top_words, aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic_name, scales = "free") +
+  coord_flip() +
+  labs(title = "Top Terms per Topic",
+       x = "Term",
+       y = "Beta Value",
+       fill = "Topic") +
+  scale_fill_brewer(palette = "Set3") +
+  custom_theme
+```
+
+## Analisi delle Corrispondenze
+
+Nel nostro progetto, dopo aver applicato con successo il modello LDA per l’individuazione dei temi latenti all’interno del corpus, abbiamo integrato l’analisi con una **Correspondence Analysis (CA)**, una tecnica esplorativa utile per investigare le relazioni tra parole e documenti in uno spazio bidimensionale. L’obiettivo di questa analisi è stato quello di ottenere una rappresentazione visiva delle co-occorrenze semantiche tra i termini più frequenti del corpus, al fine di confermare e approfondire la struttura tematica emersa dal Topic Modeling. La CA si basa su una trasformazione della Document-Term Matrix (DTM) in una matrice di contingenza ridotta ai 70 termini più frequenti. La scelta di lavorare con un sottoinsieme di parole ha permesso una visualizzazione più chiara e interpretabile, evitando la dispersione informativa dovuta all’elevata dimensionalità tipica dei dati testuali. Dopo aver rimosso i documenti privi di contenuto rilevante (cioè con righe nulle), abbiamo applicato la CA ottenendo due dimensioni principali, che spiegano insieme una parte significativa della variabilità semantica del corpus.
+
+Nel piano bidimensionale risultante, ogni punto rappresenta un termine e la sua posizione riflette il profilo di distribuzione di quella parola nei vari documenti. I termini che si collocano vicini nello spazio condividono un contesto d’uso simile e tendono ad apparire insieme all’interno degli stessi testi. Al contrario, parole semanticamente o tematicamente distanti si dispongono in aree opposte del grafico.
+
+L’interpretazione del biplot conferma in modo coerente le quattro macro-aree tematiche individuate tramite LDA. Nella parte sinistra del grafico, osserviamo un nucleo di termini come *loans*, *banks*, *credit* e *billion* che rinvia chiaramente all’ambito della finanza privata e dei prestiti aziendali, mentre in basso compaiono parole come *markets*, *growth*, *investors* e *emerging*, che richiamano la narrativa legata ai mercati emergenti e allo sviluppo economico. In alto a destra si collocano parole come *mexico*, *president* e *trade*, riconducibili al discorso politico e alle dinamiche istituzionali, mentre al centro e leggermente verso sinistra si evidenzia il gruppo di parole associate alla crisi globale, come *crisis*, *financial*, *debt* e *governments*.
+
+La CA si è quindi rivelata uno strumento complementare molto efficace al Topic Modeling: ha permesso di visualizzare la disposizione semantica dei termini nello spazio, confermando la coerenza interna dei cluster tematici già emersi e offrendo allo stesso tempo una prospettiva più esplorativa e meno vincolata alla struttura probabilistica dell’LDA. In questo modo, è stato possibile consolidare ulteriormente l’interpretazione dei contenuti testuali del nostro corpus, rafforzando la validità delle evidenze emerse dalla precedente analisi.
+
+```{r}
+# === ANALISI DELLE CORRISPONDENZE (CA) — VERSIONE RIDOTTA E INTERPRETABILE ===
+
+# Assicurati di avere una matrice DTM in formato matrix
+dtm_ca <- as.matrix(dtm)
+
+# 1. Seleziona i 50 termini più frequenti
+top_terms <- names(sort(colSums(dtm_ca), decreasing = TRUE))[1:70]
+dtm_ca_reduced <- dtm_ca[, top_terms]
+
+# 2. Rimuovi i documenti con riga nulla (altrimenti CA fallisce)
+dtm_ca_reduced <- dtm_ca_reduced[rowSums(dtm_ca_reduced) > 0, ]
+
+# 3. Esegui l'analisi delle corrispondenze
+library(FactoMineR)
+library(factoextra)
+
+ca_result <- CA(dtm_ca_reduced, graph = FALSE)
+
+# 4. Visualizza solo i termini (colonne), nascondendo i documenti
+fviz_ca_biplot(ca_result,
+               repel = TRUE,
+               col.col = "#E74C3C",    # Termini evidenziati
+               col.row = "#2E86C100", # Documenti trasparenti
+               label = "col",         # Etichette solo per i termini
+               invisible = "row",     # Nascondi i documenti
+               title = "Correspondence Analysis (Top 70 Terms)") +
+  theme_minimal()
+```
+
+## Analisi del sentiment
+
+L’analisi del sentiment per topic ha avuto l’obiettivo di valutare se i diversi temi emersi dal modello LDA presentassero toni prevalentemente positivi o negativi. Per raggiungere questo scopo, abbiamo integrato la tecnica del sentiment analysis con i risultati del Topic Modeling, ottenendo una visione più profonda delle valenze emotive associate ai contenuti testuali.
+
+Dopo aver tokenizzato i documenti, ossia suddiviso il testo in singole parole, abbiamo rimosso le stopwords, cioè quei termini molto frequenti ma privi di rilevanza semantica, come “the”, “and”, “of”. Successivamente, abbiamo applicato il lessico Bing, un dizionario ampiamente utilizzato che assegna a ciascuna parola una classificazione binaria di tipo “positivo” o “negativo”. In base a queste etichette, è stato calcolato un punteggio di sentiment per ciascun documento, normalizzato in modo da tener conto della lunghezza del testo e da rendere i risultati confrontabili. Questo indicatore è stato definito come il rapporto tra la differenza di termini positivi e negativi e la somma complessiva, aggiungendo una piccola correzione al denominatore per evitare divisioni per zero.
+
+Una volta ottenuti i punteggi di sentiment, ogni documento è stato associato al proprio topic dominante, ovvero il tema con la probabilità più elevata secondo la matrice gamma (documenti x topic) generata dal modello LDA. Collegando l’identificativo del documento con il relativo punteggio di sentiment, abbiamo aggregato i dati per ciascun topic, calcolandone la media. In questo modo, è stato possibile stimare il sentiment medio dei documenti appartenenti a ciascun tema, traducendo il contenuto latente del modello in una misura del tono emotivo dei testi.
+
+Il grafico finale mostra come tutti e quattro i topic evidenzino un sentiment tendenzialmente negativo, il che risulta coerente con la natura critica degli argomenti trattati, come crisi economiche, instabilità politica e indebitamento. Il tema della Crisi Finanziaria è quello con il punteggio medio più negativo, segno evidente della forte carica linguistica negativa associata a parole come “crisis”, “debt”, “collapse”, “bank” o “governments”. Anche i Mercati Emergenti mostrano una tonalità negativa, probabilmente legata alla ricorrenza di concetti legati a rischio, vulnerabilità e difficoltà strutturali. I topic relativi a Prestiti e Aziende e alla Politica Economica, pur mantenendo valori inferiori allo zero, presentano tonalità leggermente meno pessimistiche, riflettendo un linguaggio più tecnico e meno drammatico.
+
+```{r}
+library(tidytext)
+library(dplyr)
+library(ggplot2)
+
+text_df <- data.frame(document = texts$doc_id,
+                      text = texts$text,
+                      stringsAsFactors = FALSE)
+
+tokens_sentiment <- text_df %>%
+  unnest_tokens(word, text)
+
+data("stop_words")
+
+tokens_sentiment <- tokens_sentiment %>%
+  anti_join(stop_words, by = "word")
+
+bing <- get_sentiments("bing")
+tokens_sentiment <- tokens_sentiment %>%
+  inner_join(bing, by = "word")
+
+sentiment_by_doc <- tokens_sentiment %>%
+  count(document, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(sentiment_score = (positive - negative) / (positive + negative + 1))
+
+gamma <- tidy(lda_model, matrix = "gamma") %>%
+  group_by(document) %>%
+  slice_max(gamma, n = 1) %>%
+  ungroup() %>%
+  select(document, topic)
+
+gamma$document <- texts$doc_id[as.numeric(gamma$document)]
+
+sentiment_topic <- sentiment_by_doc %>%
+  inner_join(gamma, by = "document") %>%
+  group_by(topic) %>%
+  summarize(avg_sentiment = mean(sentiment_score, na.rm = TRUE),
+            n_docs = n())
+
+sentiment_topic$topic_name <- recode_factor(as.character(sentiment_topic$topic),
+                                            `1` = "Mercati Emergenti",
+                                            `2` = "Politica Economica",
+                                            `3` = "Prestiti e Aziende",
+                                            `4` = "Crisi Finanziaria")
+
+ggplot(sentiment_topic, aes(x = reorder(topic_name, avg_sentiment), y = avg_sentiment, fill = topic_name)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "Sentiment Medio per Topic",
+       x = "Topic", y = "Sentiment Normalizzato") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 14)
+```
+
+## Sentiment comparativo tra i giornali (FT vs WS)
+
+Il grafico mostra il confronto del sentiment medio normalizzato tra gli articoli del *Financial Times* (FT) e del *Wall Street Journal* (WS) sul tema delle crisi del debito. I risultati indicano che entrambe le fonti tendono a utilizzare un linguaggio con connotazione negativa, ma il *Financial Times* presenta un sentiment medio più negativo rispetto al *Wall Street Journal*. Questo suggerisce che **FT** adotta un **tono più critico**, mentre **WS** mantiene un’impostazione leggermente **più neutra**. Tale differenza può riflettere scelte editoriali distinte, una diversa prospettiva ideologica o geografica, oppure una diversa enfasi nel trattare le implicazioni economico-finanziarie globali.
+
+```{r}
+
+library(tidytext)
+library(dplyr)
+library(ggplot2)
+
+text_df <- texts %>%
+  mutate(source = ifelse(str_detect(doc_id, "FT_"), "FT", "WS")) %>%
+  select(document = doc_id, text, source)
+
+tokens <- text_df %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word")
+
+sent_doc <- tokens %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  count(source, document, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(score = (positive - negative) / (positive + negative + 1))
+
+sent_source <- sent_doc %>%
+  group_by(source) %>%
+  summarize(avg_score = mean(score, na.rm = TRUE),
+            median_score = median(score, na.rm = TRUE),
+            n_docs = n()) %>%
+  ungroup()
+
+ggplot(sent_source, aes(x = source, y = avg_score, fill = source)) +
+  geom_col(show.legend = FALSE) +
+  geom_errorbar(aes(ymin = median_score, ymax = avg_score), width = 0.2) +
+  labs(title = "Sentiment medio per Fonte",
+       x = "Giornale", y = "Sentiment Normalizzato (Avg)") +
+  theme_minimal()
+```
+
+## Analisi temporale dei topic
+
+Il grafico rappresenta l’**evoluzione temporale dei topic principali** emersi dal modello LDA nel periodo 1990–2020, mettendo in relazione la frequenza relativa dei temi con l’anno di pubblicazione dei documenti. Attraverso la matrice gamma del modello, abbiamo identificato per ciascun documento il **topic dominante**, successivamente associato all’anno di pubblicazione estratto dai nomi dei file.
+
+L’obiettivo di questa analisi è stato osservare come i temi trattati nella stampa economica internazionale si siano evoluti nel tempo, evidenziando picchi, flessioni e tendenze strutturali. Tra i risultati più rilevanti, si nota un forte incremento del topic **“Crisi Finanziaria”** attorno al 2008, coerentemente con l’esplosione della crisi globale, come evidenziato anche dalla linea tratteggiata che segna l’anno della crisi dei mutui subprime. Questo picco conferma la reattività del discorso giornalistico agli eventi sistemici.
+
+Il tema “Prestiti e Aziende” si impone con decisione a partire dal 2010, raggiungendo livelli di copertura superiori al 75%, probabilmente in relazione alle politiche di rifinanziamento e alle discussioni post-crisi sulla sostenibilità del debito aziendale. Al contrario, il topic “Politica Economica” mostra una frequenza più stabile, ma con un incremento costante negli anni recenti, segno di una crescente attenzione verso le decisioni istituzionali e il ruolo della governance economica.
+
+Infine, “Mercati Emergenti” mostra una dinamica più oscillante, ma con un ruolo importante fino agli anni 2000, riflettendo probabilmente l’interesse per le economie in via di sviluppo nel periodo post-anni Novanta.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+texts$anno <- str_extract(texts$doc_id, "(19|20)\\d{2}")
+texts <- texts %>%
+  filter(!is.na(anno)) %>%
+  filter(as.numeric(anno) >= 1990 & as.numeric(anno) <= 2025)
+
+gamma <- tidy(lda_model, matrix = "gamma") %>%
+  group_by(document) %>%
+  slice_max(gamma, n = 1) %>%
+  ungroup() %>%
+  select(document, topic)
+
+gamma$document <- texts$doc_id[as.numeric(gamma$document)]
+gamma$anno <- str_extract(gamma$document, "(19|20)\\d{2}")
+
+topic_year <- gamma %>%
+  filter(!is.na(anno)) %>%
+  count(anno, topic) %>%
+  group_by(anno) %>%
+  mutate(percent = n / sum(n)) %>%
+  ungroup()
+
+topic_year$topic <- recode_factor(as.character(topic_year$topic),
+                                  `1` = "Mercati Emergenti",
+                                  `2` = "Politica Economica",
+                                  `3` = "Prestiti e Aziende",
+                                  `4` = "Crisi Finanziaria")
+
+library(ggplot2)
+library(scales)
+
+ggplot(topic_year, aes(x = as.numeric(anno), y = percent, color = topic, group = topic)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 2008, linetype = "dashed", color = "black", linewidth = 0.8) +
+  ggplot2::annotate("text", x = 2008.5, y = 1.05, label = "Crisi 2008", hjust = 0, size = 4) +
+  labs(title = "Evoluzione Temporale dei Topic (1990–2020)",
+       x = "Anno",
+       y = "Frequenza relativa (%)",
+       color = "Topic") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(1990, 2020, 5)) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom")
+```
+
+**Conclusione**\
+
+Il progetto ha combinato tecniche di Text Mining e Network Science per analizzare in modo approfondito la narrativa mediatica sulle crisi internazionali del debito. Attraverso il Topic Modeling e l’analisi del sentiment, abbiamo individuato temi ricorrenti, differenze tra fonti giornalistiche e variazioni temporali nei contenuti. Parallelamente, la costruzione di grafi di co-occorrenza e la modellazione multilayer hanno permesso di esplorare la struttura semantica dei testi e le relazioni tra i concetti più rilevanti. L’integrazione dei due approcci ha offerto una visione sistemica e comparativa delle dinamiche informative globali.
