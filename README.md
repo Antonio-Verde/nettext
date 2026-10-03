@@ -2,8 +2,6 @@
 
 An integrated Network Science and Text Mining study of how international debt crises are covered by two major financial newspapers, combining co-occurrence graph analysis with topic modeling and sentiment analysis.
 
-> Original title: *Analisi delle Crisi del Debito Internazionale: Un Approccio Integrato di Network Science e Text Mining*
-
 ## Overview
 
 This project analyzes a corpus of **503 news articles** — 329 from the *Financial Times* and 174 from the *Wall Street Journal* — covering international debt crises from the 1980s Latin American crisis through the European sovereign debt crisis and more recent events. The goal is to compare how the two outlets frame these events, both structurally (which concepts cluster together, and how) and thematically (which topics and sentiments dominate each source).
