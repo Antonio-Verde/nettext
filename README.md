@@ -19,9 +19,8 @@ The analysis runs in two parallel tracks that are brought together at the end:
 nettext/
 ├── README.md
 ├── report.qmd          # Quarto source: full narrative + code for both tracks
-├── script/
-│   ├── network_analysis.R   # standalone Network Science script
-│   └── text_mining.R        # standalone Text Mining script
+├── network_analysis.R   # standalone Network Science script
+├── text_mining.R        # standalone Text Mining script
 ├── .gitignore
 └── LICENSE
 ```
